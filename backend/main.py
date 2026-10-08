@@ -75,7 +75,7 @@ async def gerar_roteiro(
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         # Limite máximo de tokens configurado para respostas longas e completas
-        config = genai.types.GenerationConfig(max_output_tokens=5000)
+        config = genai.types.GenerationConfig(max_output_tokens=10000)
         
         # Chamada assíncrona para não bloquear o servidor
         response = await model.generate_content_async(prompt, generation_config=config)
