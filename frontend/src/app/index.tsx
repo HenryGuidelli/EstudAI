@@ -1,10 +1,9 @@
 "use client";
 
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Switch } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, Switch, Linking } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 
-// Interface de tipagem para os temas
 interface Theme {
   background: string;
   card: string;
@@ -18,7 +17,6 @@ interface Theme {
   success: string;
 }
 
-// Definição das paletas de cores modernas
 const lightTheme: Theme = {
   background: '#F9FAFB',
   card: '#FFFFFF',
@@ -53,7 +51,9 @@ export default function App() {
   const [ementa, setEmenta] = useState<string>('');
   const [horas, setHoras] = useState<string>('');
   const [arquivoPdf, setArquivoPdf] = useState<DocumentPicker.DocumentPickerAsset | null>(null);
-  const [roteiro, setRoteiro] = useState<string>('');
+  
+  const [feedback, setFeedback] = useState<string>('');
+  const [fileId, setFileId] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
 
   const toggleTheme = () => setIsDarkMode(previousState => !previousState);
@@ -76,25 +76,32 @@ export default function App() {
 
   const gerarRoteiro = async () => {
     if (!disciplina || !horas || (!ementa && !arquivoPdf)) {
-      setRoteiro('Por favor, preencha os campos obrigatórios e forneça a ementa (via texto ou PDF).');
+      setFeedback('Por favor, preencha os campos obrigatórios e forneça a ementa (via texto ou PDF).');
       return;
     }
 
     setLoading(true);
-    setRoteiro('');
+    setFeedback('');
+    setFileId(null);
     
     const formData = new FormData();
     formData.append('disciplina', disciplina);
     formData.append('horas_semanais', horas);
+    // Garantir que a ementa vai sempre, mesmo que vazia, para satisfazer o FastAPI
+    formData.append('ementa', ementa || ''); 
     
     if (arquivoPdf) {
-      formData.append('arquivo', {
-        uri: arquivoPdf.uri,
-        name: arquivoPdf.name,
-        type: arquivoPdf.mimeType || 'application/pdf'
-      } as any);
-    } else {
-      formData.append('ementa', ementa);
+      // Verificação específica para a Web
+      if (arquivoPdf.file) {
+        formData.append('arquivo', arquivoPdf.file);
+      } else {
+        // Fallback para Mobile (iOS/Android)
+        formData.append('arquivo', {
+          uri: arquivoPdf.uri,
+          name: arquivoPdf.name,
+          type: arquivoPdf.mimeType || 'application/pdf'
+        } as any);
+      }
     }
 
     try {
@@ -105,12 +112,20 @@ export default function App() {
       
       const data = await response.json();
       if (response.ok) {
-        setRoteiro(data.roteiro);
+        if (data.file_id) {
+          setFileId(data.file_id);
+        }
       } else {
-        setRoteiro(`Erro: ${data.detail}`);
+        // O FastAPI devolve um Array de erros no status 422. Isto converte-o para texto legível.
+        if (Array.isArray(data.detail)) {
+           const mensagens = data.detail.map((err: any) => err.msg).join('; ');
+           setFeedback(`Erro nos dados: ${mensagens}`);
+        } else {
+           setFeedback(`Erro: ${data.detail}`);
+        }
       }
     } catch (error) {
-      setRoteiro("Erro de conexão. Certifique-se de que a API local está rodando.");
+      setFeedback("Erro de conexão. Certifique-se de que a API local está a correr.");
     } finally {
       setLoading(false);
     }
@@ -124,7 +139,7 @@ export default function App() {
           <Text style={[styles.title, { color: theme.text }]}>EstudaAI</Text>
           <View style={styles.themeToggle}>
             <Text style={{ color: theme.text, fontSize: 14, marginRight: 8, fontWeight: 'bold' }}>
-              Tema Escuro
+              Modo Escuro
             </Text>
             <Switch
               trackColor={{ false: "#D1D5DB", true: "#93C5FD" }}
@@ -136,7 +151,7 @@ export default function App() {
         </View>
 
         <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-          Planeje sua semana de estudos. Cole a ementa ou envie o arquivo PDF.
+          Planeie a sua semana de estudos. Cole a ementa ou envie o arquivo PDF.
         </Text>
         
         <TextInput 
@@ -193,12 +208,35 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {roteiro ? (
+      {(feedback !== '' || fileId) && (
         <View style={[styles.resultContainer, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <Text style={[styles.resultTitle, { color: theme.text }]}>Seu Roteiro de Estudos:</Text>
-          <Text style={[styles.resultText, { color: theme.textSecondary }]}>{roteiro}</Text>
+          <Text style={[styles.resultTitle, { color: theme.text }]}>
+            {fileId ? 'Roteiro Gerado com Sucesso!' : 'Aviso'}
+          </Text>
+          
+          {!fileId && (
+            <Text style={[styles.resultText, { color: theme.textSecondary }]}>{feedback}</Text>
+          )}
+          
+          {fileId && (
+            <View style={styles.buttonRow}>
+              <TouchableOpacity 
+                style={[styles.actionButton, { backgroundColor: theme.primary, marginRight: 10 }]} 
+                onPress={() => Linking.openURL(`http://127.0.0.1:8000/view/${fileId}`)}
+              >
+                <Text style={styles.buttonText}>Visualizar PDF</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.actionButton, { backgroundColor: theme.success, marginLeft: 10 }]} 
+                onPress={() => Linking.openURL(`http://127.0.0.1:8000/download/${fileId}`)}
+              >
+                <Text style={styles.buttonText}>Baixar PDF</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
-      ) : null}
+      )}
     </ScrollView>
   );
 }
@@ -216,10 +254,10 @@ const styles = StyleSheet.create({
     padding: 30,
     borderRadius: 16,
     borderWidth: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
+    boxboxShadowColor: "#000",
+    boxboxShadowOffset: { width: 0, height: 4 },
+    boxboxShadowOpacity: 0.05,
+    boxboxShadowRadius: 10,
     elevation: 3,
     marginTop: 20,
   },
@@ -271,16 +309,33 @@ const styles = StyleSheet.create({
     borderRadius: 12, 
     alignItems: 'center',
     marginTop: 10,
-    shadowColor: "#3B82F6",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    boxboxShadowColor: "#3B82F6",
+    boxboxShadowOffset: { width: 0, height: 4 },
+    boxboxShadowOpacity: 0.3,
+    boxboxShadowRadius: 8,
     elevation: 4,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginTop: 15,
+  },
+  actionButton: {
+    flex: 1,
+    padding: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    boxboxShadowColor: "#000",
+    boxboxShadowOffset: { width: 0, height: 4 },
+    boxboxShadowOpacity: 0.2,
+    boxboxShadowRadius: 5,
+    elevation: 3,
   },
   buttonText: { 
     color: '#fff', 
     fontWeight: '700', 
-    fontSize: 18,
+    fontSize: 16,
     letterSpacing: 0.5,
   },
   resultContainer: { 
@@ -290,14 +345,17 @@ const styles = StyleSheet.create({
     padding: 30, 
     borderRadius: 16, 
     borderWidth: 1, 
+    alignItems: 'center',
   },
   resultTitle: { 
     fontSize: 20, 
     fontWeight: '700', 
-    marginBottom: 15,
+    marginBottom: 10,
+    textAlign: 'center',
   },
   resultText: { 
     fontSize: 16, 
     lineHeight: 28,
+    textAlign: 'center',
   }
 });
